@@ -1,5 +1,7 @@
 ﻿using System;
+using System.Configuration;
 using System.Data.SqlClient;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 
 namespace SqlDependencySample
@@ -7,12 +9,20 @@ namespace SqlDependencySample
     /// <summary>
     /// SqlDependencyサンプルクラス
     /// </summary>
+    /// <remarks>
+    /// SqlDependencyを使用するには対象データベースでServiceBrokerを有効にする必要がある。
+    /// </remarks>
     internal class DependencySample
     {
         /// <summary>
         /// ロック用オブジェクト
         /// </summary>
         private static object lockObj = new object();
+
+        /// <summary>
+        /// 処理実行中フラグ
+        /// </summary>
+        private bool ExecuteFlg { get; set; }
 
         /// <summary>
         /// 接続文字列
@@ -33,8 +43,10 @@ namespace SqlDependencySample
         /// 監視設定SQL
         /// </summary>
         /// <remarks>
-        /// テーブル名はスキーマ名から記述する必要あり。
+        /// Select文内のテーブル名はスキーマ名から記述する必要あり。
         /// 検索カラムの*による省略不可。
+        /// その他のSelect分に関する制限は以下のURLの「サポートされているSELECTステートメント」の項参照のこと。
+        /// https://msdn.microsoft.com/library/ms181122.aspx
         /// 
         /// 監視対象テーブルを複数のプロセスが1トランザクション内で複数回更新する場合、
         /// 監視専用のテーブルを別に用意したほうが良い。
@@ -54,15 +66,19 @@ namespace SqlDependencySample
         /// </summary>
         internal DependencySample()
         {
-            this.ConnectionString ="";
-            this.MaxLoopNum = 60;
-            this.SleepMillisec = 1000;
+            this.ConnectionString = ConfigurationManager.ConnectionStrings["SqlServer"].ConnectionString;
+            this.MaxLoopNum = int.Parse(ConfigurationManager.AppSettings["MaxLoopNum"]);
+            this.SleepMillisec = int.Parse(ConfigurationManager.AppSettings["SleepMillisec"]);
             this.Sql = "select column from dbo.MonitorTable";
+            this.ExecuteFlg = false;
         }
 
         /// <summary>
         /// メインループ処理
         /// </summary>
+        /// <remarks>
+        /// 1分に1度通知がなくても処理を呼び出すようにしています。
+        /// </remarks>
         public void Loop()
         {
             this.InitSqlDependency();
@@ -98,6 +114,7 @@ namespace SqlDependencySample
         /// <summary>
         /// SqlDependency設定
         /// </summary>
+        [SuppressMessage("Microsoft.Security", "CA2100:SQL クエリのセキュリティ脆弱性を確認")]
         private void SetSqlDependency()
         {
             using (var conn = new SqlConnection(this.ConnectionString))
@@ -154,13 +171,28 @@ namespace SqlDependencySample
         /// 更新を検知した場合に実行すべき処理をここに記載します。
         /// </summary>
         /// <remarks>
-        /// 通知を受けた場合、
         /// 前の通知によって作成されたスレッドがデータを処理してしまい
         /// 更新対象データがない場合も想定した作りにする必要があります。
         /// </remarks>
         private void DoSomething()
         {
-            throw new NotImplementedException();
+            // 多重実行防止用ロック
+            lock (lockObj)
+            {
+                if (ExecuteFlg)
+                {
+                    return;
+                }
+
+                this.ExecuteFlg = true;
+            }
+
+            // 実処理をここに記述
+
+            lock (lockObj)
+            {
+                this.ExecuteFlg = false;
+            }
         }
 
         /// <summary>
